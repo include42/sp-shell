@@ -33,6 +33,7 @@ void myshell_execute(char *cmdline)
     int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
     int status;
+    char path[MAXARGS] = "/bin/";
     
     strcpy(buf, cmdline);
     bg = myshell_parseline(buf, argv); 
@@ -40,7 +41,8 @@ void myshell_execute(char *cmdline)
 	    return;   /* Ignore empty lines */
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
         if(Fork() == 0){
-            if (execve(argv[0], argv, environ) < 0) {	//ex) /bin/ls ls -al &
+            strcat(path, argv[0]);
+            if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
                 printf("%s: Command not found.\n", argv[0]);
                 exit(0);
             }
@@ -61,7 +63,7 @@ void myshell_execute(char *cmdline)
 /* If first arg is a builtin command, run it and return true */
 int builtin_command(char **argv) 
 {
-    if (!strcmp(argv[0], "quit")) { /* quit command */
+    if (!strcmp(argv[0], "exit")) { /* quit command */
 	    exit(0);  
     }
     if (!strcmp(argv[0], "&")) {    /* Ignore singleton & */
