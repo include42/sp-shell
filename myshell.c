@@ -1,11 +1,11 @@
-/* $begin shellmain */
+/* $begin my-shell */
 #include "csapp.h"
 #include<errno.h>
 #define MAXARGS   128
 
 /* Function prototypes */
-void eval(char *cmdline);
-int parseline(char *buf, char **argv);
+void myshell_execute(char *cmdline);
+int myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv); 
 
 int main() 
@@ -15,19 +15,18 @@ int main()
     while (1) {
 	    /* Read */
         printf("CSE4100-SP-P#4> ");                   
-        fgets(cmdline, MAXLINE, stdin); 
-        if (feof(stdin))
+        Fgets(cmdline, MAXLINE, stdin); 
+        if (feof(stdin)){
             exit(0);
-
-	    /* Evaluate */
-    	eval(cmdline);
+        }
+    	myshell_execute(cmdline);
     } 
 }
 /* $end shellmain */
   
-/* $begin eval */
-/* eval - Evaluate a command line */
-void eval(char *cmdline) 
+/* $begin myshell_execute */
+/* myshell_execute - Evaluate a command line and fork chile process */
+void myshell_execute(char *cmdline) 
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
@@ -36,7 +35,7 @@ void eval(char *cmdline)
     int status;
     
     strcpy(buf, cmdline);
-    bg = parseline(buf, argv); 
+    bg = myshell_parseline(buf, argv); 
     if (argv[0] == NULL)  
 	    return;   /* Ignore empty lines */
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
@@ -49,11 +48,12 @@ void eval(char *cmdline)
             Wait(&status);
         }
 	/* Parent waits for foreground job to terminate */
-	if (!bg){ 
-	    int status;
+	/*if (!bg){ 
+	    //wait and kill
 	}
 	else//when there is backgrount process!
 	    printf("%d %s", pid, cmdline);
+    }*/
     }
     return;
 }
@@ -61,17 +61,19 @@ void eval(char *cmdline)
 /* If first arg is a builtin command, run it and return true */
 int builtin_command(char **argv) 
 {
-    if (!strcmp(argv[0], "quit")) /* quit command */
-	exit(0);  
-    if (!strcmp(argv[0], "&"))    /* Ignore singleton & */
-	return 1;
+    if (!strcmp(argv[0], "quit")) { /* quit command */
+	    exit(0);  
+    }
+    if (!strcmp(argv[0], "&")) {    /* Ignore singleton & */
+	    return 1;
+    }
     return 0;                     /* Not a builtin command */
 }
-/* $end eval */
+/* $end myshell_execute block */
 
-/* $begin parseline */
-/* parseline - Parse the command line and build the argv array */
-int parseline(char *buf, char **argv) 
+/* $begin myshell_parseline */
+/* myshell_parseline - Parse the command line and build the argv array */
+int myshell_parseline(char *buf, char **argv) 
 {
     char *delim;         /* Points to first space delimiter */
     int argc;            /* Number of args */
@@ -101,6 +103,6 @@ int parseline(char *buf, char **argv)
 
     return bg;
 }
-/* $end parseline */
+/* $end myshell_parseline */
 
 
