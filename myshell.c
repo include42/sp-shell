@@ -30,18 +30,20 @@ void myshell_execute(char *cmdline)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
-    char pipe_buf[MAXLINE];
+    int pipes[2];       /* Simple Pipeline I/O Array */
+    char pipe_buf[MAXLINE]; /* Buffer for pipeline */
     int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
-    int pipes[2];
-    int status;
-    char path[MAXARGS] = "/bin/";
+    int status;            /* child Process status */
+    char path[MAXARGS] = "/bin/"; /* path for find execve() path */
     
     strcpy(buf, cmdline);
     bg = myshell_parseline(buf, argv); 
-    if (argv[0] == NULL)  
-	    return;   /* Ignore empty lines */
-    
+    /* Ignore empty lines */
+    if (argv[0] == NULL) {
+	    return;   
+    }
+    /* Open Pipe for cd operation */
     if(pipe(pipes) < 0) {
         unix_error("Pipe error");
         exit(0);
@@ -55,9 +57,10 @@ void myshell_execute(char *cmdline)
                 //cd의 경우, chdir해준 뒤 pipe로 결과 전달
                 chdir(argv[1]);
                 getcwd(pipe_buf, MAXLINE);
-                Write(pipes[1], pipe_buf, strlen(pipe_buf));
+                Write(pipes[1], pipe_buf, MAXLINE);
                 exit(0);
             }
+            //---
             strcat(path, argv[0]);
             if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
                 printf("%s: Command not found.\n", argv[0]);
@@ -68,11 +71,11 @@ void myshell_execute(char *cmdline)
         if (!bg) { 
             int status; 
             Close(pipes[1]);
-            Read(pipes[0], pipe_buf, MAXLINE);
+            Wait(status);
             if(!strcmp(argv[0], "cd")) {
+                Read(pipes[0], pipe_buf, MAXLINE);
                 chdir(pipe_buf);
             }
-            Wait(status);
         } else{
             printf("%d %s", pid, cmdline);
         }
@@ -126,5 +129,3 @@ int myshell_parseline(char *buf, char **argv)
     return bg;
 }
 /* $end myshell_parseline */
-
-
