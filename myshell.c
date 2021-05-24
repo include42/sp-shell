@@ -14,7 +14,7 @@ int main()
 
     while (1) {
 	    /* Read */
-        printf("CSE4100-SP-P#4> ");                   
+        printf("CSE4100-SP-P4> ");                   
         Fgets(cmdline, MAXLINE, stdin); 
         if (feof(stdin)){
             exit(0);
@@ -30,8 +30,10 @@ void myshell_execute(char *cmdline)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
+    char pipe_buf[MAXLINE];
     int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
+    int pipes[2];
     int status;
     char path[MAXARGS] = "/bin/";
     
@@ -39,23 +41,41 @@ void myshell_execute(char *cmdline)
     bg = myshell_parseline(buf, argv); 
     if (argv[0] == NULL)  
 	    return;   /* Ignore empty lines */
+    
+    if(pipe(pipes) < 0) {
+        unix_error("Pipe error");
+        exit(0);
+    }
+
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
         if(Fork() == 0){
+            //child process
+            Close(pipes[0]);
+            if(!strcmp(argv[0], "cd")) {
+                //cd의 경우, chdir해준 뒤 pipe로 결과 전달
+                chdir(argv[1]);
+                getcwd(pipe_buf, MAXLINE);
+                Write(pipes[1], pipe_buf, strlen(pipe_buf));
+                exit(0);
+            }
             strcat(path, argv[0]);
             if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
                 printf("%s: Command not found.\n", argv[0]);
                 exit(0);
             }
-        }else{
-            Wait(&status);
         }
 	/* Parent waits for foreground job to terminate */
-	/*if (!bg){ 
-	    //wait and kill
-	}
-	else//when there is backgrount process!
-	    printf("%d %s", pid, cmdline);
-    }*/
+        if (!bg) { 
+            int status; 
+            Close(pipes[1]);
+            Read(pipes[0], pipe_buf, MAXLINE);
+            if(!strcmp(argv[0], "cd")) {
+                chdir(pipe_buf);
+            }
+            Wait(status);
+        } else{
+            printf("%d %s", pid, cmdline);
+        }
     }
     return;
 }
