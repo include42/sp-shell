@@ -13,14 +13,14 @@ int main()
     char cmdline[MAXLINE]; /* Command line */
 
     while (1) {
-	/* Read */
-	printf("> ");                   
-	fgets(cmdline, MAXLINE, stdin); 
-	if (feof(stdin))
-	    exit(0);
+	    /* Read */
+        printf("CSE4100-SP-P#4> ");                   
+        fgets(cmdline, MAXLINE, stdin); 
+        if (feof(stdin))
+            exit(0);
 
-	/* Evaluate */
-	eval(cmdline);
+	    /* Evaluate */
+    	eval(cmdline);
     } 
 }
 /* $end shellmain */
@@ -33,17 +33,21 @@ void eval(char *cmdline)
     char buf[MAXLINE];   /* Holds modified command line */
     int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
+    int status;
     
     strcpy(buf, cmdline);
     bg = parseline(buf, argv); 
     if (argv[0] == NULL)  
-	return;   /* Ignore empty lines */
+	    return;   /* Ignore empty lines */
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
-        if (execve(argv[0], argv, environ) < 0) {	//ex) /bin/ls ls -al &
-            printf("%s: Command not found.\n", argv[0]);
-            exit(0);
+        if(Fork() == 0){
+            if (execve(argv[0], argv, environ) < 0) {	//ex) /bin/ls ls -al &
+                printf("%s: Command not found.\n", argv[0]);
+                exit(0);
+            }
+        }else{
+            Wait(&status);
         }
-
 	/* Parent waits for foreground job to terminate */
 	if (!bg){ 
 	    int status;
