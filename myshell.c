@@ -5,11 +5,10 @@
 
 /* Function prototypes */
 void myshell_execute(char *cmdline);
-void myshell_redirection(char *cmdline);
 int myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv); 
-void sigint_handler(int signo) {wait(NULL);}
 
+/* $begin shellmain */
 int main() 
 {
     char cmdline[MAXLINE]; /* Command line */
@@ -25,10 +24,6 @@ int main()
     } 
 }
 /* $end shellmain */
-
-void myshell_redirection(char *cmdline) {
-//추후 파이프 구현 시 사용될 매니지먼트 함수
-}
   
 /* $begin myshell_execute */
 /* myshell_execute - Evaluate a command line and fork chile process */
@@ -36,8 +31,6 @@ void myshell_execute(char *cmdline)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
-    int pipes[2];       /* Simple Pipeline I/O Array */
-    char pipe_buf[MAXLINE]; /* Buffer for pipeline */
     int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
     int status;            /* child Process status */
@@ -49,23 +42,10 @@ void myshell_execute(char *cmdline)
     if (argv[0] == NULL) {
 	    return;   
     }
-    /* Open Pipe for cd operation */
-    if(pipe(pipes) < 0) {
-        unix_error("Pipe error");
-        exit(0);
-    }
 
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
         if(Fork() == 0){
             //child process
-            Close(pipes[0]);
-            if(!strcmp(argv[0], "cd")) {
-                //cd의 경우, chdir해준 뒤 pipe로 결과 전달
-                chdir(argv[1]);
-                getcwd(pipe_buf, MAXLINE);
-                Write(pipes[1], pipe_buf, MAXLINE);
-                exit(0);
-            }
             if (!strcmp(argv[0], "exit")) { /* exit command */
                 pid = getpid();   /* 부모의 아이디를 알아낸다. */
                 kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
@@ -78,7 +58,6 @@ void myshell_execute(char *cmdline)
             }
         } else {
             //parent
-            Close(pipes[1]);
             Wait(&status);
             if(WIFSIGNALED(status)) {
                 /* 
@@ -88,26 +67,7 @@ void myshell_execute(char *cmdline)
                 */
                 exit(0);
             }
-            if(!strcmp(argv[0], "cd")) {
-                Read(pipes[0], pipe_buf, MAXLINE);
-                chdir(pipe_buf);
-            }
         }
-	/* Parent waits for foreground job to terminate */
-        // if (!bg) { 
-        //     Close(pipes[1]);
-        //     Wait(&status);
-        //     if(WIFSIGNALED(status)) {
-        //         /* child signaled, or exit message */
-        //         exit(0);
-        //     }
-        //     if(!strcmp(argv[0], "cd")) {
-        //         Read(pipes[0], pipe_buf, MAXLINE);
-        //         chdir(pipe_buf);
-        //     }
-        // } else{
-        //     printf("%d %s", pid, cmdline);
-        // }
     }
     return;
 }
@@ -115,6 +75,10 @@ void myshell_execute(char *cmdline)
 /* If first arg is a builtin command, run it and return true */
 int builtin_command(char **argv) 
 {
+    if (!strcmp(argv[0], "cd")) {    /* Ignore singleton & */
+	    chdir(argv[1]);
+        return 1;
+    }
     if (!strcmp(argv[0], "&")) {    /* Ignore singleton & */
 	    return 1;
     }
