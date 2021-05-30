@@ -29,6 +29,8 @@ pid_t createProcess(char *cmdline);
 int myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv, int exitFlag); 
 
+int buildin_command_bg(char* cmdline, int *bgSize, BG *bgList);
+
 void myshell_piping(char *cmdline, int *bgSize, BG *bgList);
 pid_t createPipeProcess(char *cmdline, int* fd, int pipetype);
 
@@ -72,6 +74,30 @@ int isBackground(char *cmdline) {
     return 0;
 }
 
+char* getStateStr(enum STATE state) {
+    if(state == RUNNING) return "Running";
+    if(state == STOPPED) return "Stopped";
+    return "Terminated";
+}
+
+int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
+    char *argv[MAXARGS]; /* Argument list execve() */
+    char buf[MAXLINE];   /* Holds modified command line */
+    strcpy(buf, cmdline);
+    myshell_parseline(buf, argv);
+
+    if(argv[0] == NULL) return 1;
+
+    if (!strcmp(argv[0], "jobs")) {
+        int i;
+	    for(i=0;i<(*bgSize);i++) {
+            printf("[%d]\t%s\t%s\n", bgList[i].num, getStateStr(bgList[i].state), bgList[i].name);
+        }
+        return 1;
+    }
+    return 0;                     /* Not a builtin command */
+}
+
 /* myshell_piping은 명령어의 pipe 유무를 확인하고, 그 경우에 따라 올바른 연산을 수행하도록 한다. */
 void myshell_piping(char *cmdline, int* bgSize, BG *bgList) 
 {
@@ -86,6 +112,9 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
     int pidSize = 0;
 
     strcpy(buf, cmdline);
+    if(buildin_command_bg(buf, bgSize, bgList)) {
+        return;
+    }
     pipeCount = findPipeCount(buf);
     isBg = isBackground(buf);
 
