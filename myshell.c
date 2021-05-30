@@ -3,6 +3,8 @@
 #include<errno.h>
 #define MAXARGS   128
 #define MAXPIPES 20
+#define PIPEIN 1
+#define PIPEOUT 2
 
 /* Function prototypes */
 void createProcess(char *cmdline);
@@ -10,9 +12,7 @@ int myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv); 
 
 void myshell_piping(char *cmdline);
-void createStartProcess(char *cmdline, int* fd);
-void createPipeProcess(char *cmdline, int fd_in[2], int fd_out[2]);
-void createEndProcess(char *cmdline, int* fd);
+void createPipeProcess(char *cmdline, int* fd, int pipetype);
 
 /* $begin shellmain */
 int main() 
@@ -31,6 +31,7 @@ int main()
 }
 /* $end shellmain */
 
+/* findPipeCount는 pipe가 stdin으로 받은 데이터에 몇 개 있는지 확인하는 함수이다. */
 int findPipeCount(char* cmdline) {
     int length = strlen(cmdline);
     int i, cnt=0;
@@ -41,6 +42,7 @@ int findPipeCount(char* cmdline) {
     return cnt;
 }
 
+/* myshell_piping은 명령어의 pipe 유무를 확인하고, 그 경우에 따라 올바른 연산을 수행하도록 한다. */
 void myshell_piping(char *cmdline) 
 {
     int fd[MAXPIPES][2];
@@ -67,15 +69,16 @@ void myshell_piping(char *cmdline)
         }
     }
     seperatedCmdLine = strtok(buf, "|");
-    createStartProcess(seperatedCmdLine, fd[0]);
+    createPipeProcess(seperatedCmdLine, fd[0], PIPEOUT);
     Close(fd[0][1]);
     for(i=1;i<pipeCount;i++) { //pipe의 개수 +1개만큼 조각이 나뉨. 그러나 마지막은 건너뛰므로 pipeCount까지
         seperatedCmdLine = strtok(NULL, "|");
-        createPipeProcess(seperatedCmdLine, fd[i-1], fd[i]);
+        int tempFd[2] = {fd[i-1][0], fd[i][1]};
+        createPipeProcess(seperatedCmdLine, tempFd, PIPEIN | PIPEOUT);
         Close(fd[i][1]);
     }
     seperatedCmdLine = strtok(NULL, "|");
-    createEndProcess(seperatedCmdLine, fd[i-1]);
+    createPipeProcess(seperatedCmdLine, fd[i-1], PIPEIN);
 
     /*
     자식 프로세스들을 만들어 준 뒤, 부모 프로세스는 사용하지 않는 fd를 닫아준다.
@@ -107,41 +110,8 @@ void myshell_piping(char *cmdline)
         exit(0);
     }
 }
-void createStartProcess(char *cmdline, int* fd)
-{
-    char *argv[MAXARGS]; /* Argument list execve() */
-    char buf[MAXLINE];   /* Holds modified command line */
-    int bg;              /* Should the job run in bg or fg? */
-    pid_t pid;           /* Process id */
-    int status;            /* child Process status */
-    char path[MAXARGS] = "/bin/"; /* path for find execve() path */
-    
-    strcpy(buf, cmdline);
-    bg = myshell_parseline(buf, argv); 
-    /* Ignore empty lines */
-    if (argv[0] == NULL) {
-	    return;   
-    }
 
-
-    if (!builtin_command(argv)) {
-        if(Fork() == 0){
-            Dup2(fd[1], STDOUT_FILENO);
-            if (!strcmp(argv[0], "exit")) { /* exit command */
-                exit(0);
-            }
-            //---
-            strcat(path, argv[0]);
-            if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
-                printf("%s: Command not found.\n", argv[0]);
-                exit(0);
-            }
-        } 
-    }
-    return;
-}
-
-void createPipeProcess(char *cmdline, int* fd_in, int* fd_out)
+void createPipeProcess(char *cmdline, int* fd, int pipetype)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
@@ -158,12 +128,19 @@ void createPipeProcess(char *cmdline, int* fd_in, int* fd_out)
     }
     if (!builtin_command(argv)) {
         if(Fork() == 0){
-            Dup2(fd_in[0], STDIN_FILENO); //이거 문제일수도!!! ls | cat | ls -al
-            Dup2(fd_out[1], STDOUT_FILENO); //지금 이게 안되서, 표준출력으로 걍 나가버림;;;
-            Close(fd_in[0]);
-            Close(fd_out[1]);
-            //child process        
+            if(pipetype & PIPEIN) {
+                Dup2(fd[0], STDIN_FILENO); 
+                Close(fd[0]);
+            }
+            if(pipetype & PIPEOUT) {
+                Dup2(fd[1], STDOUT_FILENO); 
+                Close(fd[1]);
+            }      
             if (!strcmp(argv[0], "exit")) { /* exit command */
+                if(pipetype == PIPEIN){ // 마지막 파이프일 경우, exit의 결과로 인터럽트 시그널을 부모에게 전달
+                    pid = getpid(); 
+                    kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
+                }
                 exit(0);
             }
             //---
@@ -173,43 +150,6 @@ void createPipeProcess(char *cmdline, int* fd_in, int* fd_out)
                 exit(0);
             }
         } 
-    }
-    return;
-}
-
-void createEndProcess(char *cmdline, int* fd)
-{
-    char *argv[MAXARGS]; /* Argument list execve() */
-    char buf[MAXLINE];   /* Holds modified command line */
-    char stdBuf[MAXLINE];
-    int bg;              /* Should the job run in bg or fg? */
-    pid_t pid;           /* Process id */
-    int status;            /* child Process status */
-    char path[MAXARGS] = "/bin/"; /* path for find execve() path */
-    
-
-    strcpy(buf, cmdline);
-    bg = myshell_parseline(buf, argv); 
-    /* Ignore empty lines ls*/
-    if (argv[0] == NULL) {
-	    return;   
-    }
-    if (!builtin_command(argv)) {
-        if(Fork() == 0){
-            Dup2(fd[0], STDIN_FILENO);
-            Close(fd[0]);
-            
-            if (!strcmp(argv[0], "exit")) { /* exit command */
-                pid = getpid(); 
-                kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
-            }
-            //---
-            strcat(path, argv[0]);
-            if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
-                printf("%s: Command not found.\n", argv[0]);
-                exit(0);
-            }
-        }
     }
     return;
 }
