@@ -15,3 +15,16 @@ Your shell should be able to execute the basic internal shell commands such as,
 - exit: shell quits and returns to original program (parent process)
 
 A command is always executed by the child process created via forking by the parent process.
+
+## Phase II: Redirection and Piping in Your Shell
+### Task Specifications:
+In this phase, you will be extending the functionality of the simple of the simple shell example that you programmed in project phase I.
+Start by creating a new process for each command in the pipeline and making the parent wait for the last command. This will allow running simple commands such as "ls -al | grep filename".
+The key idea is; passing output of one process as input to another, Note that, you can have multiple chains of pipes as your command line argument.
+
+### Evaluation:
+Following shell commands with piping can be evaluated, e.g.,
+
+- ls -al | grep filename
+- cat filename | less
+- cat filename | grep -v "abc" | sort -r
