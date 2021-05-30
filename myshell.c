@@ -27,7 +27,7 @@ typedef struct _BG {
 /* Function prototypes */
 pid_t createProcess(char *cmdline);
 int myshell_parseline(char *buf, char **argv);
-int builtin_command(char **argv); 
+int builtin_command(char **argv, int exitFlag); 
 
 void myshell_piping(char *cmdline, int *bgSize, BG *bgList);
 pid_t createPipeProcess(char *cmdline, int* fd, int pipetype);
@@ -102,17 +102,8 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
     
     if(pipeCount == 0) {
         pid_t pid = createProcess(cmdline);
-        int status;
         if(!isBg){
-            Wait(&status);
-            if(WIFSIGNALED(status)) {
-                /* 
-                자식 프로세스에서 시그널이 발생한 경우, 오류를 처리해 준다. 
-                phase1에서 시그널이 생기는 경우는 exit 처리 경우뿐이므로
-                exit(0)를 해주도록 단순 처리하였다.
-                */
-                exit(0);
-            }
+            Wait(0);
         } else {
             bgList[(*bgSize)].pid[0] = pid;
             bgList[(*bgSize)++].pidSize = 1;
@@ -152,26 +143,9 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
         Close(fd[i][0]);
     }
 
-    int status;
-    int exitFlag = 0;
     if(!isBg) {
         for(i=0;i<=pidSize;i++){
-            Wait(&status);
-        }
-        if(WIFSIGNALED(status)) {
-            exitFlag = 1;
-        }
-        if(exitFlag) {
-            /* 
-            자식 프로세스에서 시그널이 발생한 경우, 오류를 처리해 준다. 
-            phase1에서 시그널이 생기는 경우는 exit 처리 경우뿐이므로
-            exit(0)를 해주도록 단순 처리하였다.
-
-            또한, 파이프 연산의 경우 마지막 연산이 exit인 경우에만 exit가 유효하다.
-            이외의 연산은 piping 과정의 일부이므로, 부모 프로세스에 영향을 주지 않는다.
-            그렇기 때문에, exit에 대한 대응은 endProcess에 한하도록 하였다.
-            */
-            exit(0);
+            Wait(0);
         }
     } else {
         //여기는 bg일때, 마지막 연산(파이프의 끝)에 대해 bg 처리하는 부분임.
@@ -199,7 +173,8 @@ pid_t createPipeProcess(char *cmdline, int* fd, int pipetype)
     if (argv[0] == NULL) {
 	    return -1;   
     }
-    if (!builtin_command(argv)) {
+    //exitFlag를 마지막인지 여부로 전달. 그렇지 않으면 exit에 대해 대응하지 않음.
+    if (!builtin_command(argv, (pipetype == PIPEIN))) {
         if((pid = Fork()) == 0){
             if(pipetype & PIPEIN) {
                 Dup2(fd[0], STDIN_FILENO); 
@@ -210,9 +185,6 @@ pid_t createPipeProcess(char *cmdline, int* fd, int pipetype)
                 Close(fd[1]);
             }      
             if (!strcmp(argv[0], "exit")) { /* exit command */
-                if(pipetype == PIPEIN){ // 마지막 파이프일 경우, exit의 결과로 인터럽트 시그널을 부모에게 전달
-                    kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
-                }
                 exit(0);
             }
             //---
@@ -246,14 +218,9 @@ pid_t createProcess(char *cmdline)
 	    return -1;   
     }
 
-    if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
+    if (!builtin_command(argv, 1)) { //quit -> exit(0), & -> ignore, other -> run
         if((pid = Fork()) == 0){
             //child process
-            if (!strcmp(argv[0], "exit")) { /* exit command */
-                pid = getpid();   
-                kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
-            }
-            //---
             strcat(path, argv[0]);
             if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
                 printf("%s: Command not found.\n", argv[0]);
@@ -267,13 +234,16 @@ pid_t createProcess(char *cmdline)
 }
 
 /* If first arg is a builtin command, run it and return true */
-int builtin_command(char **argv) 
+int builtin_command(char **argv, int exitFlag) 
 {
-    if (!strcmp(argv[0], "cd")) {    /* Ignore singleton & */
+    if (!strcmp(argv[0], "cd")) {
 	    chdir(argv[1]);
         return 1;
     }
-    if (!strcmp(argv[0], "&")) {    /* Ignore singleton & */
+    if (exitFlag && !strcmp(argv[0], "exit")) {    
+	    exit(0);
+    }
+    if (!strcmp(argv[0], "&")) {    
 	    return 1;
     }
     return 0;                     /* Not a builtin command */
