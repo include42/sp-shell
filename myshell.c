@@ -68,31 +68,44 @@ void myshell_piping(char *cmdline)
     }
     seperatedCmdLine = strtok(buf, "|");
     createStartProcess(seperatedCmdLine, fd[0]);
-   // printf("link input : %d , output : %d\n", fd[0][0], fd[0][1]);
     Close(fd[0][1]);
-   // Wait(0);
     for(i=1;i<pipeCount;i++) { //pipe의 개수 +1개만큼 조각이 나뉨. 그러나 마지막은 건너뛰므로 pipeCount까지
         seperatedCmdLine = strtok(NULL, "|");
-        //printf("link input : %d , output : %d\n", fd[i-1][0], fd[i][1]);
         createPipeProcess(seperatedCmdLine, fd[i-1], fd[i]);
         Close(fd[i][1]);
-       // Wait(0);
     }
     seperatedCmdLine = strtok(NULL, "|");
-    //printf("link input : %d , output : %d op %s\n", fd[i-1][0], fd[i-1][1], seperatedCmdLine);
     createEndProcess(seperatedCmdLine, fd[i-1]);
-//Wait(0);
+
+    /*
+    자식 프로세스들을 만들어 준 뒤, 부모 프로세스는 사용하지 않는 fd를 닫아준다.
+    이후 프로세스 전체가 끝날 때까지 Wait한다.
+    Wait하는 중 만약 exit 명령이 들어오면, 
+    모든 프로세스를 리핑한 뒤 exit해준다.
+    */
     for(i=0;i<pipeCount;i++){
         Close(fd[i][0]);
-        //Close(fd[i][1]);
-        //printf("CLOSE %d and %d\n", fd[i][0], fd[i][1]);
     }
+    int status;
+    int exitFlag = 0;
     for(i=0;i<=pipeCount;i++){
-        //printf("process end _ Start...\n");
-        Wait(0);
-        //printf("process end...\n");
+        Wait(&status);
+        if(WIFSIGNALED(status)) {
+            exitFlag = 1;
+        }
     }
-//    Wait(0);
+    if(exitFlag) {
+        /* 
+        자식 프로세스에서 시그널이 발생한 경우, 오류를 처리해 준다. 
+        phase1에서 시그널이 생기는 경우는 exit 처리 경우뿐이므로
+        exit(0)를 해주도록 단순 처리하였다.
+
+        또한, 파이프 연산의 경우 마지막 연산이 exit인 경우에만 exit가 유효하다.
+        이외의 연산은 piping 과정의 일부이므로, 부모 프로세스에 영향을 주지 않는다.
+        그렇기 때문에, exit에 대한 대응은 endProcess에 한하도록 하였다.
+        */
+        exit(0);
+    }
 }
 void createStartProcess(char *cmdline, int* fd)
 {
@@ -111,16 +124,11 @@ void createStartProcess(char *cmdline, int* fd)
     }
 
 
-    if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
+    if (!builtin_command(argv)) {
         if(Fork() == 0){
-            //Close(STDOUT_FILENO);
             Dup2(fd[1], STDOUT_FILENO);
-            //Close(fd[0]);
-            //Close(fd[1]);
-            //child process
             if (!strcmp(argv[0], "exit")) { /* exit command */
-                pid = getpid();
-                kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
+                exit(0);
             }
             //---
             strcat(path, argv[0]);
@@ -148,23 +156,24 @@ void createPipeProcess(char *cmdline, int* fd_in, int* fd_out)
     if (argv[0] == NULL) {
 	    return;   
     }
-    if(Fork() == 0){
-        Dup2(fd_in[0], STDIN_FILENO); //이거 문제일수도!!! ls | cat | ls -al
-        Dup2(fd_out[1], STDOUT_FILENO); //지금 이게 안되서, 표준출력으로 걍 나가버림;;;
-        Close(fd_in[0]);
-        Close(fd_out[1]);
-        //child process        
-        if (!strcmp(argv[0], "exit")) { /* exit command */
-            pid = getpid();
-            kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
-        }
-        //---
-        strcat(path, argv[0]);
-        if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
-            printf("%s: Command not found.\n", argv[0]);
-            exit(0);
-        }
-    } 
+    if (!builtin_command(argv)) {
+        if(Fork() == 0){
+            Dup2(fd_in[0], STDIN_FILENO); //이거 문제일수도!!! ls | cat | ls -al
+            Dup2(fd_out[1], STDOUT_FILENO); //지금 이게 안되서, 표준출력으로 걍 나가버림;;;
+            Close(fd_in[0]);
+            Close(fd_out[1]);
+            //child process        
+            if (!strcmp(argv[0], "exit")) { /* exit command */
+                exit(0);
+            }
+            //---
+            strcat(path, argv[0]);
+            if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
+                printf("%s: Command not found.\n", argv[0]);
+                exit(0);
+            }
+        } 
+    }
     return;
 }
 
@@ -185,21 +194,21 @@ void createEndProcess(char *cmdline, int* fd)
     if (argv[0] == NULL) {
 	    return;   
     }
-    if(Fork() == 0){
-       // Sleep(10);
-        Dup2(fd[0], STDIN_FILENO);
-        Close(fd[0]);
-        //Close(fd[1]);
-        //child process
-        if (!strcmp(argv[0], "exit")) { /* exit command */
-            pid = getpid(); 
-            kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
-        }
-        //---
-        strcat(path, argv[0]);
-        if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
-            printf("%s: Command not found.\n", argv[0]);
-            exit(0);
+    if (!builtin_command(argv)) {
+        if(Fork() == 0){
+            Dup2(fd[0], STDIN_FILENO);
+            Close(fd[0]);
+            
+            if (!strcmp(argv[0], "exit")) { /* exit command */
+                pid = getpid(); 
+                kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
+            }
+            //---
+            strcat(path, argv[0]);
+            if (execve(path, argv, environ) < 0) {	//ex) /bin/ls ls -al &
+                printf("%s: Command not found.\n", argv[0]);
+                exit(0);
+            }
         }
     }
     return;
