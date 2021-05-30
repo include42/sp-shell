@@ -28,3 +28,20 @@ Following shell commands with piping can be evaluated, e.g.,
 - ls -al | grep filename
 - cat filename | less
 - cat filename | grep -v "abc" | sort -r
+
+## Phase III: Run Processes in Background in Your Shell
+### Task Specifications:
+It is the last phase of your MyShell project, where you enable your shell to run processes in background. Linux shells support the notion of job control, which allows users to move jobs back and fore between background and foreground, and to change the process state (running, stopped, or terminated) of the processes in a job.
+
+Your shell must start a command in the background if an '&' is given in the command line arguments. Besides, your shell must also provide various built-in commands that support job control.
+
+For example: 
+- jobs: List the running and stopped background jobs.
+- bg <job>: Change a stopped background job to a running background job.
+- fg <job>: Change a stopped or running background job to a running in the foreground.
+- kill <job>: Terminated a job.
+
+### Evaluation: 
+- [ ] Any command from project phase II can be given with '&' at the end of commandline
+- [ ] ls -al | grep filename &
+- [ ] cat sample | grep -v a &
