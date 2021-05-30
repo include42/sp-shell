@@ -24,22 +24,57 @@ typedef struct _BG {
     int pidSize;
 } BG;
 
+int bgSize = 1;
+BG bgList[MAXBG];
+
 /* Function prototypes */
 pid_t createProcess(char *cmdline);
 void myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv, int exitFlag); 
 
-int buildin_command_bg(char* cmdline, int *bgSize, BG *bgList);
+int buildin_command_bg(char* cmdline);
 
-void myshell_piping(char *cmdline, int *bgSize, BG *bgList);
+void myshell_piping(char *cmdline);
 pid_t createPipeProcess(char *cmdline, int* fd, int pipetype);
+
+void sigchild_handler(int signo, siginfo_t *info, void* context) 
+{
+
+    // printf(">>>>> %d\n", (*info).si_pid);
+    // if(siginfo->si_code == CLD_KILLED) {
+    //     printf("killed\n");
+    //     return; //자식 프로세스가 bg,fg를 할때도 SIGCHLD가 호출됨. 그래서 설정.
+    // }
+    if(info->si_code != CLD_EXITED) return; //자식 프로세스가 bg,fg를 할때도 SIGCHLD가 호출됨. 그래서 설정.
+    int pid = (*info).si_pid;
+    for(int i=1;i<bgSize;i++) {
+        for(int j=0;j<bgList[i].pidSize;j++) {
+            if(bgList[i].pid[j] == pid) {
+                bgList[i].pid[j] = bgList[i].pid[bgList[i].pidSize - 1];
+                bgList[i].pidSize--;
+                if(bgList[i].pidSize <= 0) {
+                    bgList[i].state = TERMINATED;
+                    //printf("%d is terminated...\n",pid);
+                    Waitpid(pid, 0, 0);
+                    //fflush(stdout);
+                }
+            }
+        }
+    }
+    //fflush(stdout);
+    return;
+}
 
 /* $begin shellmain */
 int main() 
 {
-    int bgSize = 1;
-    BG bgList[MAXBG]={};
     char cmdline[MAXLINE]; /* Command line */
+    struct sigaction action;
+
+    action.sa_flags = SA_RESTART | SA_SIGINFO;
+    action.sa_handler = sigchild_handler;
+
+    sigaction(SIGCHLD, &action, 0);
 
     while (1) {
 	    /* Read */
@@ -48,7 +83,7 @@ int main()
         if (feof(stdin)){
             exit(0);
         }
-    	myshell_piping(cmdline, &bgSize, bgList);
+    	myshell_piping(cmdline);
     } 
 }
 /* $end shellmain */
@@ -94,7 +129,7 @@ int getBGAgrn(char* str) {
     return number;
 }
 
-int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
+int buildin_command_bg(char *cmdline) {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
     strcpy(buf, cmdline);
@@ -103,7 +138,7 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
     if(argv[0] == NULL) return 1;
 
     if (!strcmp(argv[0], "jobs")) {
-	    for(int i=1;i<(*bgSize);i++) {
+	    for(int i=1;i<bgSize;i++) {
             if(bgList[i].state == TERMINATED) continue;
             printf("[%d]\t%s\t%s\n", bgList[i].num, getStateStr(bgList[i].state), bgList[i].name);
         }
@@ -112,7 +147,7 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
 
     if (!strcmp(argv[0], "bg")) {
         int id = getBGAgrn(argv[1]);
-        if(id <= 0 || id >= (*bgSize) || bgList[id - 1].state == STOPPED) {
+        if(id <= 0 || id >= bgSize || bgList[id - 1].state == STOPPED) {
             printf("잘못된 인자가 전달되었습니다.\n");
             return 1;
         }
@@ -125,7 +160,7 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
 
     if (!strcmp(argv[0], "fg")) {
         int id = getBGAgrn(argv[1]);
-        if(id <= 0 || id >= (*bgSize) || bgList[id].state == RUNNING) {
+        if(id <= 0 || id >= bgSize || bgList[id].state == RUNNING) {
             printf("잘못된 인자가 전달되었습니다.\n");
             return 1;
         }
@@ -138,7 +173,7 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
 
     if (!strcmp(argv[0], "kill")) {
         int id = getBGAgrn(argv[1]);
-        if(id <= 0 || id >= (*bgSize) || bgList[id].state == TERMINATED) {
+        if(id <= 0 || id >= bgSize || bgList[id].state == TERMINATED) {
             printf("잘못된 인자가 전달되었습니다.\n");
             return 1;
         }
@@ -153,7 +188,7 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
 }
 
 /* myshell_piping은 명령어의 pipe 유무를 확인하고, 그 경우에 따라 올바른 연산을 수행하도록 한다. */
-void myshell_piping(char *cmdline, int* bgSize, BG *bgList) 
+void myshell_piping(char *cmdline) 
 {
     int fd[MAXPIPES][2];
     char buf[MAXLINE];   /* Holds modified command line */    
@@ -167,7 +202,7 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
 
     isBg = isBackground(cmdline);
     strcpy(buf, cmdline);
-    if(buildin_command_bg(buf, bgSize, bgList)) {
+    if(buildin_command_bg(buf)) {
         return;
     }
     pipeCount = findPipeCount(buf);
@@ -178,16 +213,16 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
         //이후, Wait하지 않도록 임의로 조정한다.
         
         //구조상 사이즈가 꽉차면 문제 발생. 예외 처리
-        if((*bgSize) >= MAXBG) {
+        if(bgSize >= MAXBG) {
             printf("background queue is full\n");
         }
 
-        bgList[(*bgSize)].num = (*bgSize);
-        strncpy(bgList[(*bgSize)].name, buf, MAXBG_NAME);
+        bgList[bgSize].num = bgSize;
+        strncpy(bgList[bgSize].name, buf, MAXBG_NAME);
         if(strlen(buf) >= MAXBG_NAME) {
-            bgList[(*bgSize)].name[MAXBG_NAME - 1] = NULL;
+            bgList[bgSize].name[MAXBG_NAME - 1] = NULL;
         }
-        bgList[(*bgSize)].state = RUNNING;
+        bgList[bgSize].state = RUNNING;
     }
     
     if(pipeCount == 0) {
@@ -195,9 +230,9 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
         if(!isBg){
             Wait(0);
         } else {
-            bgList[(*bgSize)].pid[0] = pid;
-            bgList[(*bgSize)].pidSize = 1;
-            printf("[%d] %d\n", (*bgSize)++, pid);
+            bgList[bgSize].pid[0] = pid;
+            bgList[bgSize].pidSize = 1;
+            printf("[%d] %d\n", bgSize++, pid);
         }
         return;
     } else if(pipeCount >= MAXPIPES) { // 파이프가 너무 많을 경우, 해당 명령어를 실행하지 않고 종료한다.
@@ -239,12 +274,12 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
         }
     } else {
         //여기는 bg일때, 마지막 연산(파이프의 끝)에 대해 bg 처리하는 부분임.
-        bgList[(*bgSize)].pidSize = pidSize + 1;
+        bgList[bgSize].pidSize = pidSize + 1;
         for(i=0;i<pidSize;i++) {
-            bgList[(*bgSize)].pid[i] = pids[i];
+            bgList[bgSize].pid[i] = pids[i];
         }
-        bgList[(*bgSize)].pid[i] = lastPid;
-        printf("[%d] %d\n", (*bgSize)++, lastPid);
+        bgList[bgSize].pid[i] = lastPid;
+        printf("[%d] %d\n", bgSize++, lastPid);
     }
 }
 
