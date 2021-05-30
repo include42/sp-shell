@@ -2,6 +2,7 @@
 #include "csapp.h"
 #include<errno.h>
 #define MAXARGS   128
+#define MAXPIPES 20
 
 /* Function prototypes */
 void createProcess(char *cmdline);
@@ -10,7 +11,7 @@ int builtin_command(char **argv);
 
 void myshell_piping(char *cmdline);
 void createStartProcess(char *cmdline, int* fd);
-void createPipeProcess(char *cmdline, int* fd);
+void createPipeProcess(char *cmdline, int fd_in[2], int fd_out[2]);
 void createEndProcess(char *cmdline, int* fd);
 
 /* $begin shellmain */
@@ -30,58 +31,68 @@ int main()
 }
 /* $end shellmain */
 
+int findPipeCount(char* cmdline) {
+    int length = strlen(cmdline);
+    int i, cnt=0;
+
+    for(i=0;i<length;i++) {
+        if(cmdline[i] == '|') cnt++;
+    }
+    return cnt;
+}
+
 void myshell_piping(char *cmdline) 
 {
-    int fd[2];
+    int fd[MAXPIPES][2];
     char buf[MAXLINE];   /* Holds modified command line */    
     char *seperatedCmdLine;
     char *temp;
-    int processCnt = 0;
+    int pipeCount,i;
 
     strcpy(buf, cmdline);
+    pipeCount = findPipeCount(buf);
     
-    if(strstr(buf, "|") == NULL) {
+    if(pipeCount == 0) {
         createProcess(cmdline);
         return;
-    }
-
-/*
-아이디어: 파이프의 여닫기를 프로세스 쪼개고 나서 해야해!! 그게 이슈의 이유인듯!!!!!!
-혹은, 아예 함수마다 파이프 따던가
-*/
-    if(pipe(fd) < 0) {
-        unix_error("Pipe error");
+    } else if(pipeCount >= MAXPIPES) { // 파이프가 너무 많을 경우, 해당 명령어를 실행하지 않고 종료한다.
+        unix_error("Too Many Pipes...");
         exit(0);
     }
-    seperatedCmdLine = strtok(buf, "|");
-    //printf("first str is %s buf %s\n", seperatedCmdLine, buf);
-    createStartProcess(seperatedCmdLine, fd);
-    processCnt++;
-    Wait(0);
-    seperatedCmdLine = strtok(NULL, "|");
-    while(1) { //이걸 어떻게 마지막인걸 알지????????
-        temp = strtok(NULL, "|");
-        if(temp == NULL) break;
-        
-        //printf("seperate piping now... : %s\n", seperatedCmdLine);
-        createPipeProcess(seperatedCmdLine, fd);
-        processCnt++;
-        Wait(0);
-        seperatedCmdLine = temp;
+    //----
+    for(i=0;i<pipeCount;i++) {
+        if(pipe(fd[i]) < 0) {
+            unix_error("Pipe error");
+            exit(0);
+        }
     }
-    //printf("seperate end... : %s\n", seperatedCmdLine);
-    createEndProcess(seperatedCmdLine, fd);
-    Wait(0);
-    processCnt++;
-
-    Close(fd[0]);
-    Close(fd[1]);
-    // printf("wait %d processes...\n",processCnt);
-    // while(processCnt > 0) {
-    //     printf("wait first is end\n");
-    //     Wait(0);
-    //     processCnt--;
-    // }
+    seperatedCmdLine = strtok(buf, "|");
+    createStartProcess(seperatedCmdLine, fd[0]);
+   // printf("link input : %d , output : %d\n", fd[0][0], fd[0][1]);
+    Close(fd[0][1]);
+   // Wait(0);
+    for(i=1;i<pipeCount;i++) { //pipe의 개수 +1개만큼 조각이 나뉨. 그러나 마지막은 건너뛰므로 pipeCount까지
+        seperatedCmdLine = strtok(NULL, "|");
+        //printf("link input : %d , output : %d\n", fd[i-1][0], fd[i][1]);
+        createPipeProcess(seperatedCmdLine, fd[i-1], fd[i]);
+        Close(fd[i][1]);
+       // Wait(0);
+    }
+    seperatedCmdLine = strtok(NULL, "|");
+    //printf("link input : %d , output : %d op %s\n", fd[i-1][0], fd[i-1][1], seperatedCmdLine);
+    createEndProcess(seperatedCmdLine, fd[i-1]);
+//Wait(0);
+    for(i=0;i<pipeCount;i++){
+        Close(fd[i][0]);
+        //Close(fd[i][1]);
+        //printf("CLOSE %d and %d\n", fd[i][0], fd[i][1]);
+    }
+    for(i=0;i<=pipeCount;i++){
+        //printf("process end _ Start...\n");
+        Wait(0);
+        //printf("process end...\n");
+    }
+//    Wait(0);
 }
 void createStartProcess(char *cmdline, int* fd)
 {
@@ -102,9 +113,10 @@ void createStartProcess(char *cmdline, int* fd)
 
     if (!builtin_command(argv)) { //quit -> exit(0), & -> ignore, other -> run
         if(Fork() == 0){
+            //Close(STDOUT_FILENO);
             Dup2(fd[1], STDOUT_FILENO);
-            Close(fd[0]);
-            Close(fd[1]);
+            //Close(fd[0]);
+            //Close(fd[1]);
             //child process
             if (!strcmp(argv[0], "exit")) { /* exit command */
                 pid = getpid();
@@ -121,7 +133,7 @@ void createStartProcess(char *cmdline, int* fd)
     return;
 }
 
-void createPipeProcess(char *cmdline, int* fd)
+void createPipeProcess(char *cmdline, int* fd_in, int* fd_out)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
@@ -137,11 +149,11 @@ void createPipeProcess(char *cmdline, int* fd)
 	    return;   
     }
     if(Fork() == 0){
-        Dup2(fd[0], STDIN_FILENO);
-        Dup2(fd[1], STDOUT_FILENO);
-        Close(fd[0]);
-        Close(fd[1]);
-        //child process
+        Dup2(fd_in[0], STDIN_FILENO); //이거 문제일수도!!! ls | cat | ls -al
+        Dup2(fd_out[1], STDOUT_FILENO); //지금 이게 안되서, 표준출력으로 걍 나가버림;;;
+        Close(fd_in[0]);
+        Close(fd_out[1]);
+        //child process        
         if (!strcmp(argv[0], "exit")) { /* exit command */
             pid = getpid();
             kill(pid, SIGINT);     /* 인터럽트 시그널을 발생시킨다. */
@@ -152,7 +164,7 @@ void createPipeProcess(char *cmdline, int* fd)
             printf("%s: Command not found.\n", argv[0]);
             exit(0);
         }
-    }
+    } 
     return;
 }
 
@@ -174,9 +186,10 @@ void createEndProcess(char *cmdline, int* fd)
 	    return;   
     }
     if(Fork() == 0){
+       // Sleep(10);
         Dup2(fd[0], STDIN_FILENO);
         Close(fd[0]);
-        Close(fd[1]);
+        //Close(fd[1]);
         //child process
         if (!strcmp(argv[0], "exit")) { /* exit command */
             pid = getpid(); 
