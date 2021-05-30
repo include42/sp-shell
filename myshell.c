@@ -26,7 +26,7 @@ typedef struct _BG {
 
 /* Function prototypes */
 pid_t createProcess(char *cmdline);
-int myshell_parseline(char *buf, char **argv);
+void myshell_parseline(char *buf, char **argv);
 int builtin_command(char **argv, int exitFlag); 
 
 int buildin_command_bg(char* cmdline, int *bgSize, BG *bgList);
@@ -37,7 +37,7 @@ pid_t createPipeProcess(char *cmdline, int* fd, int pipetype);
 /* $begin shellmain */
 int main() 
 {
-    int bgSize = 0;
+    int bgSize = 1;
     BG bgList[MAXBG]={};
     char cmdline[MAXLINE]; /* Command line */
 
@@ -80,6 +80,20 @@ char* getStateStr(enum STATE state) {
     return "Terminated";
 }
 
+int getBGAgrn(char* str) {
+    int size = strlen(str);
+    int number = 0;
+    
+    if(str[0] != '%') return -1;
+    for(int i=1;i<size;i++) {
+        if(str[i] < '0' || str[i] > '9') return -1;
+        number = (number * 10) + (str[i] - '0');
+    }
+    if(number <= 0)
+        return -1;
+    return number;
+}
+
 int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
@@ -89,12 +103,52 @@ int buildin_command_bg(char *cmdline, int *bgSize, BG *bgList) {
     if(argv[0] == NULL) return 1;
 
     if (!strcmp(argv[0], "jobs")) {
-        int i;
-	    for(i=0;i<(*bgSize);i++) {
+	    for(int i=1;i<(*bgSize);i++) {
+            if(bgList[i].state == TERMINATED) continue;
             printf("[%d]\t%s\t%s\n", bgList[i].num, getStateStr(bgList[i].state), bgList[i].name);
         }
         return 1;
     }
+
+    if (!strcmp(argv[0], "bg")) {
+        int id = getBGAgrn(argv[1]);
+        if(id <= 0 || id >= (*bgSize) || bgList[id - 1].state == STOPPED) {
+            printf("잘못된 인자가 전달되었습니다.\n");
+            return 1;
+        }
+        for(int i=0;i<bgList[id].pidSize; i++) {
+            kill(bgList[id].pid[i], SIGTSTP);
+        } 
+        bgList[id].state = STOPPED;
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "fg")) {
+        int id = getBGAgrn(argv[1]);
+        if(id <= 0 || id >= (*bgSize) || bgList[id].state == RUNNING) {
+            printf("잘못된 인자가 전달되었습니다.\n");
+            return 1;
+        }
+        for(int i=0;i<bgList[id].pidSize; i++) {
+            kill(bgList[id].pid[i], SIGCONT);
+        } 
+        bgList[id].state = RUNNING;
+        return 1;
+    }
+
+    if (!strcmp(argv[0], "kill")) {
+        int id = getBGAgrn(argv[1]);
+        if(id <= 0 || id >= (*bgSize) || bgList[id].state == TERMINATED) {
+            printf("잘못된 인자가 전달되었습니다.\n");
+            return 1;
+        }
+        for(int i=0;i<bgList[id].pidSize; i++) {
+            kill(bgList[id].pid[i], SIGINT);
+        } 
+        bgList[id].state = TERMINATED; //어차피 별 의미는 없음. 사이즈 줄일거라...
+        return 1;
+    }
+
     return 0;                     /* Not a builtin command */
 }
 
@@ -111,16 +165,23 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
     pid_t pids[MAXPIPES]={0,};
     int pidSize = 0;
 
+    isBg = isBackground(cmdline);
     strcpy(buf, cmdline);
     if(buildin_command_bg(buf, bgSize, bgList)) {
         return;
     }
     pipeCount = findPipeCount(buf);
-    isBg = isBackground(buf);
+    
 
     if(isBg) {
         //백그라운드 실행일 경우, bgList에 정보를 넣는다.
         //이후, Wait하지 않도록 임의로 조정한다.
+        
+        //구조상 사이즈가 꽉차면 문제 발생. 예외 처리
+        if((*bgSize) >= MAXBG) {
+            printf("background queue is full\n");
+        }
+
         bgList[(*bgSize)].num = (*bgSize);
         strncpy(bgList[(*bgSize)].name, buf, MAXBG_NAME);
         if(strlen(buf) >= MAXBG_NAME) {
@@ -135,8 +196,8 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
             Wait(0);
         } else {
             bgList[(*bgSize)].pid[0] = pid;
-            bgList[(*bgSize)++].pidSize = 1;
-            printf("[%d] %d\n", (*bgSize), pid);
+            bgList[(*bgSize)].pidSize = 1;
+            printf("[%d] %d\n", (*bgSize)++, pid);
         }
         return;
     } else if(pipeCount >= MAXPIPES) { // 파이프가 너무 많을 경우, 해당 명령어를 실행하지 않고 종료한다.
@@ -182,8 +243,8 @@ void myshell_piping(char *cmdline, int* bgSize, BG *bgList)
         for(i=0;i<pidSize;i++) {
             bgList[(*bgSize)].pid[i] = pids[i];
         }
-        bgList[(*bgSize)++].pid[i] = lastPid;
-        printf("[%d] %d\n", (*bgSize), lastPid);
+        bgList[(*bgSize)].pid[i] = lastPid;
+        printf("[%d] %d\n", (*bgSize)++, lastPid);
     }
 }
 
@@ -191,13 +252,12 @@ pid_t createPipeProcess(char *cmdline, int* fd, int pipetype)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
-    int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
     int status;            /* child Process status */
     char path[MAXARGS] = "/bin/"; /* path for find execve() path */
     
     strcpy(buf, cmdline);
-    bg = myshell_parseline(buf, argv); 
+    myshell_parseline(buf, argv); 
     /* Ignore empty lines */
     if (argv[0] == NULL) {
 	    return -1;   
@@ -235,13 +295,12 @@ pid_t createProcess(char *cmdline)
 {
     char *argv[MAXARGS]; /* Argument list execve() */
     char buf[MAXLINE];   /* Holds modified command line */
-    int bg;              /* Should the job run in bg or fg? */
     pid_t pid;           /* Process id */
     int status;            /* child Process status */
     char path[MAXARGS] = "/bin/"; /* path for find execve() path */
     
     strcpy(buf, cmdline);
-    bg = myshell_parseline(buf, argv); 
+    myshell_parseline(buf, argv); 
     /* Ignore empty lines */
     if (argv[0] == NULL) {
 	    return -1;   
@@ -281,7 +340,7 @@ int builtin_command(char **argv, int exitFlag)
 
 /* $begin myshell_parseline */
 /* myshell_parseline - Parse the command line and build the argv array */
-int myshell_parseline(char *buf, char **argv) 
+void myshell_parseline(char *buf, char **argv) 
 {
     char *delim;         /* Points to first space delimiter */
     int argc;            /* Number of args */
@@ -301,14 +360,7 @@ int myshell_parseline(char *buf, char **argv)
             buf++;
     }
     argv[argc] = NULL;
-    
-    if (argc == 0)  /* Ignore blank line */
-	return 1;
 
-    /* Should the job run in the background? */
-    if ((bg = (*argv[argc-1] == '&')) != 0)
-	argv[--argc] = NULL;
-
-    return bg;
+    return;
 }
 /* $end myshell_parseline */
