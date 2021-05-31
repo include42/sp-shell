@@ -39,13 +39,6 @@ pid_t createPipeProcess(char *cmdline, int* fd, int pipetype);
 
 void sigchild_handler(int signo, siginfo_t *info, void* context) 
 {
-
-    // printf(">>>>> %d\n", (*info).si_pid);
-    // if(siginfo->si_code == CLD_KILLED) {
-    //     printf("killed\n");
-    //     return; //자식 프로세스가 bg,fg를 할때도 SIGCHLD가 호출됨. 그래서 설정.
-    // }
-    if(info->si_code != CLD_EXITED) return; //자식 프로세스가 bg,fg를 할때도 SIGCHLD가 호출됨. 그래서 설정.
     int pid = (*info).si_pid;
     for(int i=1;i<bgSize;i++) {
         for(int j=0;j<bgList[i].pidSize;j++) {
@@ -54,14 +47,13 @@ void sigchild_handler(int signo, siginfo_t *info, void* context)
                 bgList[i].pidSize--;
                 if(bgList[i].pidSize <= 0) {
                     bgList[i].state = TERMINATED;
-                    //printf("%d is terminated...\n",pid);
                     Waitpid(pid, 0, 0);
-                    //fflush(stdout);
+                    printf("[%d]\tDone\t\t%s\n", bgList[i].num, bgList[i].name);
+                    return;
                 }
             }
         }
     }
-    //fflush(stdout);
     return;
 }
 
@@ -71,15 +63,17 @@ int main()
     char cmdline[MAXLINE]; /* Command line */
     struct sigaction action;
 
-    action.sa_flags = SA_RESTART | SA_SIGINFO;
+    action.sa_flags = SA_NOCLDSTOP | SA_RESTART | SA_SIGINFO;
     action.sa_handler = sigchild_handler;
 
     sigaction(SIGCHLD, &action, 0);
 
     while (1) {
 	    /* Read */
-        printf("CSE4100-SP-P4> ");                   
+        usleep(100000);
+        printf("CSE4100-SP-P4> "); 
         Fgets(cmdline, MAXLINE, stdin); 
+        if(!strcmp(cmdline, "\n")) continue;
         if (feof(stdin)){
             exit(0);
         }
@@ -140,7 +134,7 @@ int buildin_command_bg(char *cmdline) {
     if (!strcmp(argv[0], "jobs")) {
 	    for(int i=1;i<bgSize;i++) {
             if(bgList[i].state == TERMINATED) continue;
-            printf("[%d]\t%s\t%s\n", bgList[i].num, getStateStr(bgList[i].state), bgList[i].name);
+            printf("[%d]\t%s\t\t%s\n", bgList[i].num, getStateStr(bgList[i].state), bgList[i].name);
         }
         return 1;
     }
@@ -180,11 +174,11 @@ int buildin_command_bg(char *cmdline) {
         for(int i=0;i<bgList[id].pidSize; i++) {
             kill(bgList[id].pid[i], SIGINT);
         } 
-        bgList[id].state = TERMINATED; //어차피 별 의미는 없음. 사이즈 줄일거라...
+        bgList[id].state = TERMINATED;
         return 1;
     }
 
-    return 0;                     /* Not a builtin command */
+    return 0;  /* Not a builtin command */
 }
 
 /* myshell_piping은 명령어의 pipe 유무를 확인하고, 그 경우에 따라 올바른 연산을 수행하도록 한다. */
@@ -214,7 +208,8 @@ void myshell_piping(char *cmdline)
         
         //구조상 사이즈가 꽉차면 문제 발생. 예외 처리
         if(bgSize >= MAXBG) {
-            printf("background queue is full\n");
+            unix_error("Too Many background processes...");
+            exit(0);
         }
 
         bgList[bgSize].num = bgSize;
