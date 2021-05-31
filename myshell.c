@@ -356,13 +356,11 @@ int builtin_command(char **argv, int exitFlag)
 {
     if (!strcmp(argv[0], "cd")) {
 	    chdir(argv[1]);
+        if(fork() == 0) exit(0);
         return 1;
     }
     if (exitFlag && !strcmp(argv[0], "exit")) {    
 	    exit(0);
-    }
-    if (!strcmp(argv[0], "&")) {    
-	    return 1;
     }
     return 0;                     /* Not a builtin command */
 }
